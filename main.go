@@ -19,7 +19,7 @@ import (
 
 const profile = "default"
 const region = "eu-west-1"
-const index_file = "/tmp/hosts"
+const indexFile = "/tmp/hosts"
 
 // InstanceStruct represents the data structure for the instances retrieve from EC2
 type InstanceStruct struct {
@@ -42,7 +42,15 @@ func connectSession() *session.Session {
 
 func fetchInstances(client *session.Session) []InstanceStruct {
 	ec2Svc := ec2.New(client)
-	result, err := ec2Svc.DescribeInstances(nil)
+	params := &ec2.DescribeInstancesInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("instance-state-name"),
+				Values: []*string{aws.String("running")},
+			},
+		},
+	}
+	result, err := ec2Svc.DescribeInstances(params)
 
 	if err != nil {
 		check(err)
@@ -116,11 +124,11 @@ func readInput(data []InstanceStruct) string {
 
 func writeCache(data []InstanceStruct) {
 	file, _ := json.MarshalIndent(data, "", " ")
-	_ = ioutil.WriteFile(index_file, file, 0644)
+	_ = ioutil.WriteFile(indexFile, file, 0644)
 }
 
 func readCache() []InstanceStruct {
-	file, err := ioutil.ReadFile(index_file)
+	file, err := ioutil.ReadFile(indexFile)
 	check(err)
 	instances := make([]InstanceStruct, 0)
 	json.Unmarshal(file, &instances)
@@ -135,13 +143,17 @@ func check(e error) {
 }
 
 func main() {
-	file, err := os.Stat(index_file)
-	check(err)
+	file, _ := os.Stat(indexFile)
+	args := os.Args
+	rebuild := false
+	if len(args) > 1 && args[1] == "rebuild" {
+		rebuild = true
+	}
 
 	now := time.Now()
 	instances := make([]InstanceStruct, 0)
 
-	if file.ModTime().Unix()+3*60*60 > now.Unix() {
+	if rebuild == false && file != nil && file.ModTime().Unix()+3*60*60 > now.Unix() {
 		instances = readCache()
 	} else {
 		sess := connectSession()
