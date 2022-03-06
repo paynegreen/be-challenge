@@ -92,9 +92,9 @@ func readInput(data []InstanceStruct) string {
 	var options []string
 
 	for _, value := range data {
-		options = append(options, fmt.Sprintf("%s-%s\n", value.Name, value.InstanceID[2:]))
+		options = append(options, fmt.Sprintf("%s-%s", value.Name, value.InstanceID[2:]))
 	}
-	fmt.Print(strings.Join(options, "\n"))
+	fmt.Println(strings.Join(options, "\n"))
 
 	line := liner.NewLiner()
 	defer line.Close()
