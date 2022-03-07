@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -17,8 +19,6 @@ import (
 	"github.com/peterh/liner"
 )
 
-const profile = "default"
-const region = "eu-west-1"
 const indexFile = "/tmp/hosts"
 
 // InstanceStruct represents the data structure for the instances retrieve from EC2
@@ -27,7 +27,7 @@ type InstanceStruct struct {
 	Name       string
 }
 
-func connectSession() *session.Session {
+func connectSession(profile string, region string) *session.Session {
 	sess, err := session.NewSession(&aws.Config{
 		Region:      aws.String(region),
 		Credentials: credentials.NewSharedCredentials("", profile),
@@ -73,7 +73,7 @@ func fetchInstances(client *session.Session) []InstanceStruct {
 	return instances
 }
 
-func startSsm(instance string) {
+func startSsm(instance string, profile string, region string) {
 	cmd := exec.Command("aws", "--profile", profile, "--region", region, "ssm", "start-session", "--target", strings.TrimSpace(instance))
 	cmd.Stdout = os.Stdout
 	cmd.Stdin = os.Stdin
@@ -84,7 +84,7 @@ func startSsm(instance string) {
 	}
 }
 
-func readInput(data []InstanceStruct) string {
+func readInput(data []InstanceStruct) (string, error) {
 	fmt.Println("#########################################")
 	fmt.Println("Instances")
 	fmt.Println("#########################################")
@@ -116,10 +116,10 @@ func readInput(data []InstanceStruct) string {
 		if opt == "exit" {
 			os.Exit(3)
 		}
-		return fmt.Sprintf("i-%s", opt)
-	} else {
-		panic(err)
+		return fmt.Sprintf("i-%s", opt), nil
 	}
+
+	return "error", errors.New("error parsing input")
 }
 
 func writeCache(data []InstanceStruct) {
@@ -143,24 +143,45 @@ func check(e error) {
 }
 
 func main() {
-	file, _ := os.Stat(indexFile)
-	args := os.Args
-	rebuild := false
-	if len(args) > 1 && args[1] == "rebuild" {
-		rebuild = true
-	}
+	profile := flag.String("profile", "default", "Change default AWS_PROFILE")
+	region := flag.String("region", "eu-west-1", "Change default AWS_REGION")
+	rebuild := flag.String("rebuild", "false", "Set rebuild to clear cached resources")
+	resource := flag.String("resource", "ec2", "Retrieve EC2 or ECS Fargate resources")
+	flag.Parse()
 
-	now := time.Now()
-	instances := make([]InstanceStruct, 0)
+	sess := connectSession(*profile, *region)
 
-	if rebuild == false && file != nil && file.ModTime().Unix()+3*60*60 > now.Unix() {
-		instances = readCache()
+	if *resource == "ec2" {
+		file, _ := os.Stat(indexFile)
+
+		now := time.Now()
+		instances := make([]InstanceStruct, 0)
+
+		if *rebuild == "false" && file != nil && file.ModTime().Unix()+3*60*60 > now.Unix() {
+			instances = readCache()
+		} else {
+			instances = fetchInstances(sess)
+			writeCache(instances)
+		}
+		instance, err := readInput(instances)
+		check(err)
+		startSsm(instance, *profile, *region)
 	} else {
-		sess := connectSession()
-		instances = fetchInstances(sess)
-		writeCache(instances)
+		clusters := make([]FargateStruct, 0)
+		clusters = fetchClusters(sess)
+		cluster, err := readFargateInput(clusters)
+
+		check(err)
+		services := fetchServices(sess, cluster)
+		service, err := readFargateInput(services)
+		check(err)
+		tasks := fetchTasks(sess, cluster, service)
+		task, err := readFargateInput(tasks)
+		check(err)
+		containers := describeTasks(sess, cluster, task)
+		container, err := readFargateInput(containers)
+		check(err)
+		startFargateSsm(cluster, task, container, *profile, *region)
 	}
 
-	instance := readInput(instances)
-	startSsm(instance)
 }
